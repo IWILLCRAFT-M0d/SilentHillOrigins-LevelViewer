@@ -1,7 +1,7 @@
 #include "UI.h"
 #include "Loader.h"
 #include "Common.h"
-#include "imgui/imgui.h"
+#include "imgui.h"
 #include <algorithm>
 #include <iostream>
 
@@ -73,7 +73,7 @@ void FileBrowserState::Render() {
                 selectedTxds.clear();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Load") && !selectedMeshContainer.empty() && !selectedTxds.empty()) {
+            if (ImGui::Button("Load") && !selectedMeshContainer.empty()) {
                 LoadLevel(selectedMeshContainer, selectedTxds);
                 showBrowser = false;
             }

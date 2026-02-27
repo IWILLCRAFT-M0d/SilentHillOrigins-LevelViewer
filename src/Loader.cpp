@@ -34,62 +34,90 @@ void LoadTexturesFromTxd(const std::string& txdPath, const std::vector<std::stri
     const int MAGIC_OFFSET = 80;
     size_t pos = 0;
 
-    while (pos < sz - 100) {
-        uint32_t type; memcpy(&type, &data[pos], 4);
-        if (type == 0x15) {
-            try {
-                uint32_t chunkSz; memcpy(&chunkSz, &data[pos + 4], 4);
-                size_t curr = pos + 32;
-                uint32_t sLen; memcpy(&sLen, &data[curr + 4], 4);
-                std::string tName = (sLen < 128) ? std::string((char*)&data[curr + 12]) : "Unknown";
-                curr += 12 + sLen; memcpy(&sLen, &data[curr + 4], 4); curr += 12 + sLen; curr += 24;
+    /*
+    File checks:
+    1 - Checks file signature
+    Checks if TXD file it is indeed a TXD file and not a random file with the extension.
+    
+    2 - Checks texture count
+    Checks if the texture count isn't 0.
+    
+    3 - Checks platform format.
+    Checks if the texture is in the PS2 format.
+    */
 
-                uint32_t w, h, d;
-                memcpy(&w, &data[curr], 4); memcpy(&h, &data[curr + 4], 4); memcpy(&d, &data[curr + 8], 4);
-                uint32_t dSz, pSz;
-                memcpy(&dSz, &data[curr + 48], 4); memcpy(&pSz, &data[curr + 52], 4);
-                uint32_t rawWrapU, rawWrapV;
-                memcpy(&rawWrapU, &data[curr + 56], 4);
-                memcpy(&rawWrapV, &data[curr + 60], 4);
-                curr += 76;
+    uint32_t fileSignature; memcpy(&fileSignature, &data[pos], 4);
+    if (fileSignature != 0x16) { return; }
+    
+    pos += 24;
+    uint16_t texCount; memcpy(&texCount, &data[pos], 2);
+    if (texCount == 0) { return; }
 
-                RawTexture t;
-                t.name = tName; t.width = w; t.height = h; t.depth = d;
-                t.clampU = (rawWrapU != 0);
-                t.clampV = (rawWrapV != 0);
+    pos += 2;
+    uint16_t platformId; memcpy(&platformId, &data[pos], 2);
+    switch (platformId) {
+        case 3: // GameCube (Same as Wii)
+            return;
+        case 6: // PS2
+            break;
+        case 9: // PSP
+            return;
+        default:
+            return;
+    }
+    pos += 2;
+    
+    for (uint32_t i = 0; i < texCount; i++) {
+        if (pos > sz) { break; }
+        //uint32_t type; memcpy(&type, &data[pos], 4);
+        uint32_t chunkSz; memcpy(&chunkSz, &data[pos + 4], 4);
+        size_t curr = pos + 32;
+        uint32_t sLen; memcpy(&sLen, &data[curr + 4], 4);
+        std::string tName = (sLen < 128) ? std::string((char*)&data[curr + 12]) : "Unknown";
+        curr += 12 + sLen; memcpy(&sLen, &data[curr + 4], 4); curr += 12 + sLen; curr += 24;
 
-                bool nameAllowed = fallback;
-                if (!fallback) {
-                    for (const auto& allowed : allowedNames) {
-                        if (strcasecmp(t.name.c_str(), allowed.c_str()) == 0) {
-                            nameAllowed = true;
-                            break;
-                        }
-                    }
+        uint32_t w, h, d;
+        memcpy(&w, &data[curr], 4); memcpy(&h, &data[curr + 4], 4); memcpy(&d, &data[curr + 8], 4);
+        uint32_t dSz, pSz;
+        memcpy(&dSz, &data[curr + 48], 4); memcpy(&pSz, &data[curr + 52], 4);
+        uint32_t rawWrapU, rawWrapV;
+        memcpy(&rawWrapU, &data[curr + 56], 4);
+        memcpy(&rawWrapV, &data[curr + 60], 4);
+        curr += 76;
+
+        RawTexture t;
+        t.name = tName; t.width = w; t.height = h; t.depth = d;
+        t.clampU = (rawWrapU != 0);
+        t.clampV = (rawWrapV != 0);
+
+        bool nameAllowed = fallback;
+        if (!fallback) {
+            for (const auto& allowed : allowedNames) {
+                if (strcasecmp(t.name.c_str(), allowed.c_str()) == 0) {
+                    nameAllowed = true;
+                    break;
                 }
-                if (!nameAllowed) {
-                    pos += 12 + chunkSz; continue;
-                }
-
-                if (curr + MAGIC_OFFSET + (dSz - MAGIC_OFFSET) <= sz && dSz > MAGIC_OFFSET) {
-                    t.pixels.resize(dSz - MAGIC_OFFSET);
-                    memcpy(t.pixels.data(), &data[curr + MAGIC_OFFSET], dSz - MAGIC_OFFSET);
-                }
-                curr += dSz;
-                if (pSz > MAGIC_OFFSET && curr + MAGIC_OFFSET + (pSz - MAGIC_OFFSET) <= sz) {
-                    t.palette.resize(pSz - MAGIC_OFFSET);
-                    memcpy(t.palette.data(), &data[curr + MAGIC_OFFSET], pSz - MAGIC_OFFSET);
-                }
-
-                if (!t.pixels.empty() && g_TextureMap.find(t.name) == g_TextureMap.end()) {
-                    ProcessAndUploadTexture(t);
-                }
-
-                pos += 12 + chunkSz; continue;
             }
-            catch (...) {}
         }
-        pos++;
+        if (!nameAllowed) {
+            pos += 12 + chunkSz; continue;
+        }
+
+        if (curr + MAGIC_OFFSET + (dSz - MAGIC_OFFSET) <= sz && dSz > MAGIC_OFFSET) {
+            t.pixels.resize(dSz - MAGIC_OFFSET);
+            memcpy(t.pixels.data(), &data[curr + MAGIC_OFFSET], dSz - MAGIC_OFFSET);
+        }
+        curr += dSz;
+        if (pSz > MAGIC_OFFSET && curr + MAGIC_OFFSET + (pSz - MAGIC_OFFSET) <= sz) {
+            t.palette.resize(pSz - MAGIC_OFFSET);
+            memcpy(t.palette.data(), &data[curr + MAGIC_OFFSET], pSz - MAGIC_OFFSET);
+        }
+
+        if (!t.pixels.empty() && g_TextureMap.find(t.name) == g_TextureMap.end()) {
+            ProcessAndUploadTexture(t);
+        }
+
+        pos += 12 + chunkSz; continue;
     }
 }
 
