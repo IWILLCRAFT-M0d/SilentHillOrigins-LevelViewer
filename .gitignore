@@ -1,0 +1,36 @@
+# Build outputs
+build/
+SHOViewer
+*.o
+*.a
+*.so
+
+# Compiled objects in src/vendor
+src/*.o
+vendor/imgui/*.o
+vendor/imgui/backends/*.o
+vendor/imguizmo/*.o
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+
+# Game assets (do not redistribute)
+Motel/
+*.sho
+*.SHO
+*.txd
+*.TXD
+
+# Editor / IDE
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*~
+
+# ImGui layout save
+imgui.ini

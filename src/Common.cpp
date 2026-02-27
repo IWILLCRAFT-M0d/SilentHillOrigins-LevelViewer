@@ -1,0 +1,51 @@
+#include "Common.h"
+#include <cstring>
+
+// Визначення глобальних змінних
+ViewerState state;
+std::vector<MeshChunk>        g_Chunks;
+std::vector<std::string>      g_MaterialNames;
+std::map<std::string, GLuint>           g_TextureMap;
+std::map<std::string, TexPreviewInfo>   g_TexInfo;
+std::vector<ContainerChunkInfo>         g_ContainerChunks;
+std::map<std::string, std::vector<int>> g_MeshTexMap;
+
+std::vector<ShoTypeEntry>  g_ShoTypes;
+std::vector<ShoSection>    g_ShoSections;
+CollisionMesh              g_Collision;
+std::vector<ClumpObject>   g_Clumps;
+
+std::string              g_CurrentMeshContainer;
+std::vector<std::string> g_CurrentTxdPaths;
+
+void CollisionMesh::Upload() {
+    if (verts.empty()) return;
+    if (vao) Free();
+    // build a flat vertex buffer: just positions (as Vertex structs with green color)
+    std::vector<float> buf;
+    buf.reserve(verts.size() * 3);
+    for (auto& v : verts) { buf.push_back(v.x); buf.push_back(v.y); buf.push_back(v.z); }
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizei)(buf.size()*sizeof(float)), buf.data(), GL_STATIC_DRAW);
+    // position only (loc 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
+    glEnableVertexAttribArray(0);
+    if (!indices.empty()) {
+        glGenBuffers(1, &ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+            (GLsizei)(indices.size()*sizeof(uint32_t)), indices.data(), GL_STATIC_DRAW);
+    }
+    glBindVertexArray(0);
+    uploaded = true;
+}
+
+void CollisionMesh::Free() {
+    if (ebo) { glDeleteBuffers(1, &ebo); ebo = 0; }
+    if (vbo) { glDeleteBuffers(1, &vbo); vbo = 0; }
+    if (vao) { glDeleteVertexArrays(1, &vao); vao = 0; }
+    uploaded = false;
+}

@@ -1,0 +1,479 @@
+#include "UI.h"
+#include "Loader.h"
+#include "Common.h"
+#include "imgui/imgui.h"
+#include <algorithm>
+#include <iostream>
+
+FileBrowserState g_FileBrowser;
+namespace fs = std::filesystem;
+
+void FileBrowserState::Open(bool forMesh) {
+    selectingMesh = forMesh;
+    showBrowser = true;
+    if (currentPath.empty()) {
+        currentPath = fs::current_path().string();
+    }
+    RefreshEntries();
+}
+
+void FileBrowserState::RefreshEntries() {
+    entries.clear();
+    errorMessage.clear(); // Clear previous error messages
+    try {
+        if (fs::is_directory(currentPath)) {
+            for (const auto& entry : fs::directory_iterator(currentPath)) {
+                entries.push_back(entry.path());
+            }
+            std::sort(entries.begin(), entries.end(), [](const fs::path& a, const fs::path& b) {
+                bool aIsDir = fs::is_directory(a);
+                bool bIsDir = fs::is_directory(b);
+                if (aIsDir != bIsDir) return aIsDir;
+                return a.filename().string() < b.filename().string();
+            });
+        }
+    }
+    catch (const std::filesystem::filesystem_error& e) {
+        errorMessage = "Filesystem error: " + std::string(e.what());
+        std::cerr << errorMessage << std::endl;
+    }
+    catch (const std::exception& e) {
+        errorMessage = "General error: " + std::string(e.what());
+        std::cerr << errorMessage << std::endl;
+    }
+}
+
+void FileBrowserState::Render() {
+    if (!showBrowser) return;
+
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+    std::string title = selectingMesh ? "Select Mesh Container (no extension)" : "Select .txd texture containers";
+    if (ImGui::Begin(title.c_str(), &showBrowser)) {
+        if (!errorMessage.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error: %s", errorMessage.c_str());
+            ImGui::Separator();
+        }
+        ImGui::Text("Path: %s", currentPath.c_str());
+        ImGui::Separator();
+
+        if (ImGui::Button("..") && fs::path(currentPath).has_parent_path()) {
+            currentPath = fs::path(currentPath).parent_path().string();
+            RefreshEntries();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh")) {
+            RefreshEntries();
+        }
+
+        if (!selectingMesh) {
+            ImGui::SameLine();
+            ImGui::Text("Selected: %zu .txd(s)", selectedTxds.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear")) {
+                selectedTxds.clear();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load") && !selectedMeshContainer.empty() && !selectedTxds.empty()) {
+                LoadLevel(selectedMeshContainer, selectedTxds);
+                showBrowser = false;
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::BeginChild("FileList");
+
+        // These are set inside the loop and acted on AFTER it to avoid
+        // invalidating the `entries` iterator mid-loop.
+        pendingNavigate.clear();
+        pendingOpenTxd = false;
+
+        for (const auto& entry : entries) {
+            bool isDir = fs::is_directory(entry);
+            std::string name = entry.filename().string();
+            std::string ext = entry.extension().string();
+
+            std::string extLower = ext;
+            std::transform(extLower.begin(), extLower.end(), extLower.begin(),
+                [](unsigned char c){ return std::tolower(c); });
+            bool shouldShow = isDir ||
+                (selectingMesh && ext.empty()) ||
+                (!selectingMesh && extLower == ".txd");
+
+            if (!shouldShow) continue;
+
+            if (isDir) {
+                // Single click navigates into the directory.
+                if (ImGui::Selectable(("[DIR] " + name).c_str(), false)) {
+                    pendingNavigate = entry.string();
+                }
+
+                // Convenience button: add all .txd files from this directory.
+                if (!selectingMesh) {
+                    ImGui::SameLine();
+                    if (ImGui::Button(("Add all .txd##" + name).c_str())) {
+                        try {
+                            for (const auto& subEntry : fs::directory_iterator(entry)) {
+                                std::string e = subEntry.path().extension().string();
+                                std::transform(e.begin(), e.end(), e.begin(),
+                                    [](unsigned char c){ return std::tolower(c); });
+                                if (e == ".txd") {
+                                    std::string p = subEntry.path().string();
+                                    if (std::find(selectedTxds.begin(), selectedTxds.end(), p) == selectedTxds.end())
+                                        selectedTxds.push_back(p);
+                                }
+                            }
+                        } catch (const std::exception& ex) {
+                            errorMessage = std::string("Cannot read directory: ") + ex.what();
+                        }
+                    }
+                }
+            }
+            else {
+                bool isSelected = false;
+                if (!selectingMesh) {
+                    isSelected = std::find(selectedTxds.begin(), selectedTxds.end(), entry.string()) != selectedTxds.end();
+                }
+
+                if (ImGui::Selectable(name.c_str(), isSelected)) {
+                    if (selectingMesh) {
+                        // Single click selects the mesh container and moves to TXD selection.
+                        selectedMeshContainer = entry.string();
+                        pendingOpenTxd = true;
+                    }
+                    else {
+                        auto it = std::find(selectedTxds.begin(), selectedTxds.end(), entry.string());
+                        if (it != selectedTxds.end()) selectedTxds.erase(it);
+                        else selectedTxds.push_back(entry.string());
+                    }
+                }
+            }
+        }
+
+        ImGui::EndChild();
+
+        // --- Deferred actions (safe: loop is finished, iterator is no longer alive) ---
+        if (!pendingNavigate.empty()) {
+            currentPath = pendingNavigate;
+            RefreshEntries();
+        }
+        if (pendingOpenTxd) {
+            showBrowser = false;
+            Open(false);
+        }
+    }
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Structure / hierarchy window
+// ---------------------------------------------------------------------------
+void RenderStructureWindow() {
+    ImGui::SetNextWindowPos(ImVec2(10, 290), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(340, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Structure")) { ImGui::End(); return; }
+
+    if (g_MeshTexMap.empty() && g_ShoTypes.empty() && g_ShoSections.empty()) {
+        ImGui::TextDisabled("Load a level to see its hierarchy.");
+        ImGui::End();
+        return;
+    }
+
+    // ============================================================
+    // Section 1: Game object types (from SHO type directory table)
+    // ============================================================
+    if (!g_ShoTypes.empty()) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+        if (ImGui::CollapsingHeader("Game Objects")) {
+            ImGui::PushID("gametypes");
+            uint32_t total = 0;
+            for (const auto& t : g_ShoTypes) total += t.count;
+            ImGui::TextDisabled("%zu types  |  %u objects total", g_ShoTypes.size(), total);
+            ImGui::Spacing();
+            for (const auto& t : g_ShoTypes) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.90f, 1.00f, 1.0f));
+                ImGui::Bullet();
+                ImGui::SameLine(0, 4);
+                ImGui::Text("%-36s", t.name.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.55f, 0.88f, 0.55f, 1.0f), "x%u", t.count);
+            }
+            ImGui::PopID();
+        }
+        ImGui::Spacing();
+    }
+
+    // ============================================================
+    // Section 2: File sections (0x716 containers)
+    // ============================================================
+    if (!g_ShoSections.empty()) {
+        ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
+        if (ImGui::CollapsingHeader("File Sections")) {
+            ImGui::PushID("sections");
+            ImGui::TextDisabled("%zu sections", g_ShoSections.size());
+            ImGui::Spacing();
+            for (const auto& s : g_ShoSections) {
+                // Colour-code by section type
+                ImVec4 col = ImVec4(0.75f, 0.90f, 0.75f, 1.0f);
+                if      (s.name == "rwID_CBSP")          col = ImVec4(0.95f, 0.50f, 0.30f, 1.0f);
+                else if (s.name == "rwID_CLUMP")         col = ImVec4(0.90f, 0.80f, 0.30f, 1.0f);
+                else if (s.name.rfind("rwaID", 0) == 0)  col = ImVec4(0.65f, 0.65f, 0.85f, 1.0f);
+                else if (s.name == "rwID_POLYAREA")      col = ImVec4(0.80f, 0.60f, 0.90f, 1.0f);
+
+                ImGui::PushStyleColor(ImGuiCol_Text, col);
+                ImGui::Bullet();
+                ImGui::SameLine(0, 4);
+                ImGui::Text("%-26s", s.name.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::TextDisabled("@ 0x%05X  (%u B)", s.offset, s.size);
+            }
+            // Collision summary
+            if (g_Collision.uploaded) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.15f, 0.95f, 0.30f, 1.0f),
+                    "  Collision: %zu verts  %zu tris",
+                    g_Collision.verts.size(), g_Collision.indices.size() / 3);
+            }
+            if (!g_Clumps.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.15f, 1.0f),
+                    "  Clumps: %zu objects", g_Clumps.size());
+                ImGui::Indent();
+                for (size_t i = 0; i < g_Clumps.size(); i++) {
+                    const auto& cl = g_Clumps[i];
+                    ImGui::TextDisabled("[%zu] %-20s  (%.2f, %.2f, %.2f)",
+                        i, cl.sectionName.c_str(),
+                        cl.position.x, cl.position.y, cl.position.z);
+                }
+                ImGui::Unindent();
+            }
+            ImGui::PopID();
+        }
+        ImGui::Spacing();
+    }
+
+    // ============================================================
+    // Section 3: Scene — texture groups → meshes
+    // ============================================================
+    std::string sceneName = g_CurrentMeshContainer.empty()
+        ? "(no level)"
+        : fs::path(g_CurrentMeshContainer).filename().string();
+
+    size_t totalMeshes = g_Chunks.size();
+    size_t totalTris   = 0;
+    for (const auto& ch : g_Chunks) totalTris += ch.vertices.size() / 3;
+
+    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+    bool rootOpen = ImGui::TreeNodeEx("##root",
+        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen,
+        "%s", sceneName.c_str());
+    if (rootOpen) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("  %zu meshes  %zu tris", totalMeshes, totalTris);
+    }
+
+    if (rootOpen) {
+        for (const auto& [texName, chunkIdxs] : g_MeshTexMap) {
+            size_t triCount = 0;
+            for (int ci : chunkIdxs)
+                if (ci < (int)g_Chunks.size())
+                    triCount += g_Chunks[ci].vertices.size() / 3;
+
+            // Resolve texture (try lowercase then uppercase)
+            bool hasTex = g_TextureMap.count(texName) > 0;
+            if (!hasTex) {
+                std::string u = texName;
+                for (auto& x : u) x = (char)toupper((unsigned char)x);
+                hasTex = g_TextureMap.count(u) > 0;
+            }
+
+            // Thumbnail (16 px)
+            GLuint thumbId = 0;
+            {
+                auto it = g_TexInfo.find(texName);
+                if (it != g_TexInfo.end()) thumbId = it->second.glID;
+                else {
+                    std::string u = texName;
+                    for (auto& x : u) x = (char)toupper((unsigned char)x);
+                    auto it2 = g_TexInfo.find(u);
+                    if (it2 != g_TexInfo.end()) thumbId = it2->second.glID;
+                }
+            }
+
+            ImGui::PushID(texName.c_str());
+
+            if (thumbId) { ImGui::Image((ImTextureID)(intptr_t)thumbId, ImVec2(16, 16)); ImGui::SameLine(); }
+            else          { ImGui::Dummy(ImVec2(16, 16)); ImGui::SameLine(); }
+
+            if (!hasTex) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+            bool nodeOpen = ImGui::TreeNodeEx("##mat",
+                ImGuiTreeNodeFlags_SpanAvailWidth,
+                "%s", texName.c_str());
+            if (!hasTex) {
+                ImGui::SameLine(); ImGui::TextColored(ImVec4(1.f,0.4f,0.4f,1.f), " [MISSING]");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::SameLine();
+                ImGui::TextDisabled("  %zu meshes  %zu tris", chunkIdxs.size(), triCount);
+            }
+
+            if (nodeOpen) {
+                for (int ci : chunkIdxs) {
+                    if (ci >= (int)g_Chunks.size()) continue;
+                    size_t t = g_Chunks[ci].vertices.size() / 3;
+                    ImGui::Bullet();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Mesh #%d   (%zu tris)", ci, t);
+                }
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// TXD texture browser
+// ---------------------------------------------------------------------------
+static bool        s_texFullscreen = false;
+static std::string s_texFullName;
+static float       s_texZoom = 1.0f;
+
+// Helper: is string all-uppercase?
+static bool IsAllUpper(const std::string& s) {
+    for (char c : s) if (c >= 'a' && c <= 'z') return false;
+    return true;
+}
+
+void RenderTxdWindow() {
+    ImGui::SetNextWindowPos(ImVec2(1050, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(230, 600), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Textures")) { ImGui::End(); return; }
+
+    if (g_TexInfo.empty()) {
+        ImGui::TextDisabled("(no textures loaded)");
+        ImGui::End();
+        return;
+    }
+
+    const float THUMB = 56.0f;
+    const float ITEM_H = THUMB + 6.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+    ImGui::BeginChild("##txdlist", ImVec2(0, 0), false);
+
+    for (const auto& [name, pi] : g_TexInfo) {
+        // Skip upper-case aliases (duplicates of lowercase entries)
+        if (IsAllUpper(name)) {
+            std::string lo = name;
+            for (auto& c : lo) c = (char)tolower((unsigned char)c);
+            if (g_TexInfo.count(lo)) continue;
+        }
+
+        ImGui::PushID(name.c_str());
+
+        // Row background highlight on hover
+        float rowY = ImGui::GetCursorPosY();
+        ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        ImVec2 rowMax = ImVec2(rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + ITEM_H);
+        bool hovered = ImGui::IsMouseHoveringRect(rowMin, rowMax);
+        if (hovered)
+            ImGui::GetWindowDrawList()->AddRectFilled(rowMin, rowMax,
+                IM_COL32(60, 100, 160, 80), 4.0f);
+
+        // Thumbnail
+        ImGui::Image((ImTextureID)(intptr_t)pi.glID, ImVec2(THUMB, THUMB));
+        ImGui::SameLine(THUMB + 8.0f);
+
+        // Text info column
+        ImGui::BeginGroup();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::TextDisabled("%d x %d  %dbit", pi.width, pi.height, pi.depth);
+        ImGui::EndGroup();
+
+        // Invisible selectable over the entire row
+        ImGui::SetCursorPosY(rowY);
+        if (ImGui::Selectable("##row", false,
+                ImGuiSelectableFlags_AllowDoubleClick |
+                ImGuiSelectableFlags_SpanAllColumns,
+                ImVec2(0, ITEM_H))) {
+            if (ImGui::IsMouseDoubleClicked(0)) {
+                s_texFullscreen = true;
+                s_texFullName   = name;
+                s_texZoom       = 1.0f;
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::End();
+
+    // ---- Fullscreen texture viewer ----
+    if (!s_texFullscreen) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::SetNextWindowBgAlpha(0.93f);
+    ImGui::Begin("##texfull", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+
+    // Top bar
+    if (ImGui::Button("  X  ") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        s_texFullscreen = false;
+        ImGui::End();
+        return;
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "%s", s_texFullName.c_str());
+    if (g_TexInfo.count(s_texFullName)) {
+        auto& pi = g_TexInfo[s_texFullName];
+        ImGui::SameLine();
+        ImGui::TextDisabled("  %d x %d  %dbit", pi.width, pi.height, pi.depth);
+    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - 220.0f);
+    if (ImGui::Button(" - ##z")) s_texZoom = std::max(s_texZoom * 0.8f,  0.05f);
+    ImGui::SameLine();
+    if (ImGui::Button(" + ##z")) s_texZoom = std::min(s_texZoom * 1.25f, 16.0f);
+    ImGui::SameLine();
+    if (ImGui::Button("1:1"))    s_texZoom = 1.0f;
+    ImGui::SameLine();
+    if (ImGui::Button("Fit") && g_TexInfo.count(s_texFullName)) {
+        auto& pi = g_TexInfo[s_texFullName];
+        float fw = io.DisplaySize.x - 24;
+        float fh = io.DisplaySize.y - 48;
+        s_texZoom = std::min(fw / std::max(pi.width, 1),
+                             fh / std::max(pi.height, 1));
+    }
+
+    // Scroll-to-zoom
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && io.MouseWheel != 0.0f)
+        s_texZoom = std::clamp(s_texZoom * (io.MouseWheel > 0 ? 1.1f : 0.9f), 0.05f, 16.0f);
+
+    ImGui::Separator();
+
+    if (g_TexInfo.count(s_texFullName)) {
+        auto& pi = g_TexInfo[s_texFullName];
+        float tw = pi.width  * s_texZoom;
+        float th = pi.height * s_texZoom;
+        ImGui::BeginChild("##imgview", ImVec2(0, 0), false,
+            ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        // Center small images
+        float offX = std::max(0.0f, (ImGui::GetContentRegionAvail().x - tw) * 0.5f);
+        float offY = std::max(0.0f, (ImGui::GetContentRegionAvail().y - th) * 0.5f);
+        if (offX > 0 || offY > 0) ImGui::SetCursorPos(ImVec2(offX, offY));
+        ImGui::Image((ImTextureID)(intptr_t)pi.glID, ImVec2(tw, th));
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+
