@@ -137,5 +137,5 @@ vendor/
 
 ## License
 
-[CC BY 4.0](LICENSE) — Copyright (c) 2026 BlackLineInteractive.
+[CC BY 4.0](LICENSE) — Copyright (c) 2026 Blackline Interactive.
 You are free to use, share, and adapt this code for any purpose **as long as you credit the author**.
