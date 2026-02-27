@@ -12,7 +12,8 @@ full level geometry, baked lighting, collision mesh, and placed objects interact
 
 ## Screenshots
 
-![Screenshot](screenshots/screenshot1.png)
+![Screenshot 1](screenshots/screenshot1.png)
+![Screenshot 2](screenshots/screenshot2.png)
 
 ---
 
