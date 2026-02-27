@@ -23,14 +23,11 @@ install_manifest.txt
 
 # Game assets (do not redistribute)
 Motel/
-*.sho
-*.SHO
 *.txd
 *.TXD
 
 # Editor / IDE
-.vscode/settings.json
-.vscode/launch.json
+.vscode/
 .idea/
 *.swp
 *~

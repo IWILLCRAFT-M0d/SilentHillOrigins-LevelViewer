@@ -3,7 +3,7 @@
 A real-time 3D viewer for game levels and locations from **Silent Hill Origins** (PS2 / PSP),
 with potential compatibility for **Silent Hill: Shattered Memories**.
 
-Opens the proprietary `.sho` container format, decodes native PS2 textures, and renders the
+Opens proprietary SHO container files (no file extension — named like `MO_1_Room102`), decodes native PS2 textures, and renders the
 full level geometry, baked lighting, collision mesh, and placed objects interactively.
 
 > License: [CC BY 4.0](LICENSE) — free to use and modify, **attribution required**.
@@ -69,14 +69,14 @@ ImGui and ImGuizmo are downloaded automatically during the CMake configure step.
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
-./build/SHOViewer path/to/level.sho [texture.txd ...]
+./build/SHOViewer path/to/MO_1_Room102 [texture.txd ...]
 ```
 
 ### Makefile (local vendor/)
 
 ```bash
 make -j$(nproc)
-./SHOViewer path/to/level.sho [texture.txd ...]
+./SHOViewer path/to/MO_1_Room102 [texture.txd ...]
 ```
 
 ---
@@ -84,10 +84,13 @@ make -j$(nproc)
 ## Usage
 
 ```
-SHOViewer <level.sho> [txd1 txd2 ...]
+SHOViewer <container_file> [txd1 txd2 ...]
 ```
 
-Textures can be embedded inside the SHO file or supplied as separate TXD archives.
+Container files have **no extension** — they are named like `MO_1_Room102`, `MO_1_Courtyard`, etc.
+Texture files end in `.txd` (no extension on the texture dictionary is also possible).
+
+Textures can be embedded inside the container or supplied as separate TXD archives.
 The file browser inside the application can also open files at runtime.
 
 ---
