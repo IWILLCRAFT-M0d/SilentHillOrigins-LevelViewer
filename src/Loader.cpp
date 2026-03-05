@@ -1,6 +1,6 @@
 #include "Loader.h"
 #include "Common.h"
-#include "PS2Texture.h"
+#include "Textures.h"
 #include <fstream>
 #include <cstring>
 #include <cmath>
@@ -30,9 +30,8 @@ void LoadTexturesFromTxd(const std::string& txdPath, const std::vector<std::stri
 
     size_t sz = f.tellg(); f.seekg(0);
     std::vector<uint8_t> data(sz); f.read((char*)data.data(), sz);
-
-    const int MAGIC_OFFSET = 80;
     size_t pos = 0;
+    rwTXDHeader* header = new rwTXDHeader;
 
     /*
     File checks:
@@ -46,78 +45,85 @@ void LoadTexturesFromTxd(const std::string& txdPath, const std::vector<std::stri
     Checks if the texture is in the PS2 format.
     */
 
-    uint32_t fileSignature; memcpy(&fileSignature, &data[pos], 4);
-    if (fileSignature != 0x16) { return; }
-    
-    pos += 24;
-    uint16_t texCount; memcpy(&texCount, &data[pos], 2);
-    if (texCount == 0) { return; }
+    memcpy(header, &data[pos], sizeof(rwTXDHeader));
+    pos += sizeof(rwTXDHeader);
 
-    pos += 2;
-    uint16_t platformId; memcpy(&platformId, &data[pos], 2);
-    switch (platformId) {
+    if (header->fileHeader.fileSignature != 0x16 || header->texCount == 0) { return; }
+    
+    switch (header->platformId) {
         case 3: // GameCube (Same as Wii)
+            delete header;
             return;
         case 6: // PS2
+            for (uint32_t i = 0; i < header->texCount; i++) {
+                if (pos > sz) { break; }
+                TXD::PS2::TextureDataLoad(data, pos, sz, allowedNames, fallback);
+            }
+            delete header;
             break;
         case 9: // PSP
+            delete header;
             return;
         default:
+            delete header;
             return;
     }
-    pos += 2;
+    return;
+}
+
+void LoadTextureFromContainer(const std::string& containerPath, const std::vector<std::string>& allowedNames, bool fallback) {
+    std::ifstream f(containerPath, std::ios::binary | std::ios::ate);
+    if (!f) return;
+
+    size_t sz = f.tellg(); f.seekg(0);
+    std::vector<uint8_t> data(sz); f.read((char*)data.data(), sz);
+    size_t pos = 0;
+    size_t headerSize = 0;
+    size_t fileSize = 0;
+    rwHeader* header = new rwHeader;
+    rwTXDHeader* TXDheader = new rwTXDHeader;
     
-    for (uint32_t i = 0; i < texCount; i++) {
-        if (pos > sz) { break; }
-        //uint32_t type; memcpy(&type, &data[pos], 4);
-        uint32_t chunkSz; memcpy(&chunkSz, &data[pos + 4], 4);
-        size_t curr = pos + 32;
-        uint32_t sLen; memcpy(&sLen, &data[curr + 4], 4);
-        std::string tName = (sLen < 128) ? std::string((char*)&data[curr + 12]) : "Unknown";
-        curr += 12 + sLen; memcpy(&sLen, &data[curr + 4], 4); curr += 12 + sLen; curr += 24;
+    while (pos < sz) {
+        memcpy(header, &data[pos], sizeof(rwHeader));
+        pos += sizeof(rwHeader);
+        
+        if (header->fileSignature == 0x716) {
+            memcpy(&headerSize, &data[pos], 4);
+            pos += headerSize + 4;
+            memcpy(&fileSize, &data[pos], 4);
+            pos += 4;
 
-        uint32_t w, h, d;
-        memcpy(&w, &data[curr], 4); memcpy(&h, &data[curr + 4], 4); memcpy(&d, &data[curr + 8], 4);
-        uint32_t dSz, pSz;
-        memcpy(&dSz, &data[curr + 48], 4); memcpy(&pSz, &data[curr + 52], 4);
-        uint32_t rawWrapU, rawWrapV;
-        memcpy(&rawWrapU, &data[curr + 56], 4);
-        memcpy(&rawWrapV, &data[curr + 60], 4);
-        curr += 76;
+            // Read TXD data.
+            memcpy(TXDheader, &data[pos], sizeof(rwTXDHeader));
 
-        RawTexture t;
-        t.name = tName; t.width = w; t.height = h; t.depth = d;
-        t.clampU = (rawWrapU != 0);
-        t.clampV = (rawWrapV != 0);
-
-        bool nameAllowed = fallback;
-        if (!fallback) {
-            for (const auto& allowed : allowedNames) {
-                if (strcasecmp(t.name.c_str(), allowed.c_str()) == 0) {
-                    nameAllowed = true;
-                    break;
-                }
+            if (TXDheader->fileHeader.fileSignature != 0x16 || TXDheader->texCount == 0) {
+                pos += fileSize;
+                continue;
             }
+            pos += sizeof(rwTXDHeader);
+            
+            switch (TXDheader->platformId) {
+                case 3: // GameCube (Same as Wii)
+                    return;
+                case 6: // PS2
+                    for (uint32_t i = 0; i < TXDheader->texCount; i++) {
+                        TXD::PS2::TextureDataLoad(data, pos, sz, allowedNames, fallback);
+                    }
+                    pos += 12;
+                    continue;
+                case 9: // PSP
+                    return;
+                default:
+                    return;
+            }
+            delete header;
+        } else {
+            if (header->fileSize == 0) {
+                pos += 4;
+            } else {
+                pos += header->fileSize;
+            };
         }
-        if (!nameAllowed) {
-            pos += 12 + chunkSz; continue;
-        }
-
-        if (curr + MAGIC_OFFSET + (dSz - MAGIC_OFFSET) <= sz && dSz > MAGIC_OFFSET) {
-            t.pixels.resize(dSz - MAGIC_OFFSET);
-            memcpy(t.pixels.data(), &data[curr + MAGIC_OFFSET], dSz - MAGIC_OFFSET);
-        }
-        curr += dSz;
-        if (pSz > MAGIC_OFFSET && curr + MAGIC_OFFSET + (pSz - MAGIC_OFFSET) <= sz) {
-            t.palette.resize(pSz - MAGIC_OFFSET);
-            memcpy(t.palette.data(), &data[curr + MAGIC_OFFSET], pSz - MAGIC_OFFSET);
-        }
-
-        if (!t.pixels.empty() && g_TextureMap.find(t.name) == g_TextureMap.end()) {
-            ProcessAndUploadTexture(t);
-        }
-
-        pos += 12 + chunkSz; continue;
     }
 }
 
@@ -146,6 +152,7 @@ void LoadGeometry(const std::string& geomPath) {
         uint32_t numMat = ru32(mlDataOff + 12);
         if (numMat == 0 || numMat > 512) return names;
         size_t curr = mlDataOff + 12 + fcSize; // skip Struct chunk entirely
+        size_t savePos;
         for (uint32_t m = 0; m < numMat; m++) {
             if (curr + 12 >= sz) break;
             uint32_t matType = ru32(curr);
@@ -301,6 +308,7 @@ void LoadGeometry(const std::string& geomPath) {
         size_t next = FindPattern(data, MV, pos);
         if (next != (size_t)-1 && (next - pos) < 50) { pos = next + 7; cS = pos - 7; }
         if (pos >= sz) break;
+        //if (cS == 994779) continue;
 
         // Determine which GeoObject this block belongs to
         int geoIdx = -1;
@@ -320,6 +328,10 @@ void LoadGeometry(const std::string& geomPath) {
         int stride = isV4_16 ? 16 : 12;
 
         std::vector<bool> adcFlags(vnum, false);
+        if (vnum * stride + pos > next) {
+            std::cout << "SOMETHING IS OFF. VERTICES COUNT IS BIGGER THAN EXPECTED - POS: " << pos-2 << std::endl;
+            continue;
+        }
         bool hasAdc = false;
 
         std::vector<Vertex> rawVerts;
@@ -327,6 +339,7 @@ void LoadGeometry(const std::string& geomPath) {
         for (int i = 0; i < vnum; i++) {
             Vertex v;
             memcpy(&v.pos, &data[vRead], 12);
+            //std::cout << v.pos.x << " | " << v.pos.y << " | " << v.pos.z << " | pos: " << vRead << " | CS pos: " << cS << std::endl;
             v.uv    = {0, 0};
             v.color = {1.0f, 1.0f, 1.0f, 1.0f};
             if (isV4_16 && vRead + 14 < sz) {
@@ -456,11 +469,18 @@ void LoadLevel(const std::string& meshContainerPath, const std::vector<std::stri
     LoadGeometry(meshContainerPath);
 
     // 1. Спочатку шукаємо строго за іменем
+    // (DeepL Translation): 1. First, we search strictly by name
     for (const auto& txd : txdPaths) {
         LoadTexturesFromTxd(txd, g_MaterialNames, false);
     }
+    
+    // 1 ALT. (SHSM) Search for textures inside file container.
+    LoadTextureFromContainer(meshContainerPath, g_MaterialNames, false);
+    
+    
 
     // 2. Якщо лишились незаповнені слоти – fallback
+    // (DeepL Translation): 2. If there are unfilled slots left – fallback
     std::vector<std::string> missing;
     for (const auto& mat : g_MaterialNames) {
         if (g_TextureMap.find(mat) == g_TextureMap.end()) {

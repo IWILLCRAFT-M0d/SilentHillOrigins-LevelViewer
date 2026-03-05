@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
 
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* win = SDL_CreateWindow("SHO Viewer", 0, 0, 1280, 720,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     SDL_GL_SetSwapInterval(1);
     glewInit();
@@ -285,10 +285,17 @@ void main(){
 
     // Mouse orbit state
     bool  mouseRight = false;
+    float movementSpeed = 1.0f;
     int   prevMouseX = 0, prevMouseY = 0;
 
     bool run = true;
     while (run) {
+        if (state.forward && !state.backward) { state.camTargetX -= movementSpeed; }
+        else if (state.backward && !state.forward) { state.camTargetX += movementSpeed; }
+
+        if (state.left && !state.right) { state.camTargetZ += movementSpeed; }
+        else if (state.right && !state.left) { state.camTargetZ -= movementSpeed; }
+
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL2_ProcessEvent(&e);
@@ -316,6 +323,39 @@ void main(){
                 state.camPitch  = glm::clamp(state.camPitch - dy * 0.4f, -89.0f, 89.0f);
                 prevMouseX = e.motion.x;
                 prevMouseY = e.motion.y;
+            }
+
+            if (e.type == SDL_KEYDOWN) {
+                switch (e.key.keysym.sym) {
+                    case SDLK_w:
+                        state.forward = true;
+                        break;
+                    case SDLK_s:
+                        state.backward = true;
+                        break;
+                    case SDLK_a:
+                        state.left = true;
+                        break;
+                    case SDLK_d:
+                        state.right = true;
+                        break;
+                }
+            }
+            else if (e.type == SDL_KEYUP) {
+                switch (e.key.keysym.sym) {
+                    case SDLK_w:
+                        state.forward = false;
+                        break;
+                    case SDLK_s:
+                        state.backward = false;
+                        break;
+                    case SDLK_a:
+                        state.left = false;
+                        break;
+                    case SDLK_d:
+                        state.right = false;
+                        break;
+                }
             }
         }
 
@@ -369,10 +409,8 @@ void main(){
             glBindTexture(GL_TEXTURE_2D, id);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-            if (state.forceRepeat) {
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            }
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         }
 
         glUseProgram(p);
@@ -599,9 +637,12 @@ void main(){
         ImGui::TextDisabled("Camera");
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderFloat("##dist", &state.camDist, 1.0f, 200.0f, "Dist %.1f");
+        ImGui::TextDisabled("Camera Speed");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("##movementSpeed", &movementSpeed, 0.1f, 50.0f, "Speed %.1f");
         if (ImGui::Button("Reset Camera", ImVec2(-1, 0))) {
             state.camTargetX = 0; state.camTargetY = 2; state.camTargetZ = 0;
-            state.camYaw = 0; state.camPitch = 20; state.camDist = 15;
+            state.camYaw = 0; state.camPitch = 20; state.camDist = 15; movementSpeed = 1.0f;
         }
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
@@ -638,7 +679,6 @@ void main(){
         ImGui::Checkbox("Wireframe",   &state.showWireframe); ImGui::SameLine(128);
         ImGui::Checkbox("Linear",      &state.linearFilter);
         ImGui::Checkbox("Vert.Colors", &state.useVertexColors); ImGui::SameLine(128);
-        ImGui::Checkbox("Repeat UV",   &state.forceRepeat);
         ImGui::SetNextItemWidth(-44.0f);
         ImGui::SliderFloat("##bright", &state.brightness, 0.5f, 3.0f);
         ImGui::SameLine(); ImGui::TextDisabled("Bright");

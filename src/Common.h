@@ -107,7 +107,6 @@ struct ViewerState {
     float uvScaleX = 1.0f, uvScaleY = 1.0f;
     bool showWireframe    = false;
     bool linearFilter     = true;
-    bool forceRepeat      = false;
     bool useVertexColors  = true;
     float brightness      = 1.3f;
     bool showCollision    = false;  // overlay collision wireframe
@@ -121,6 +120,24 @@ struct ViewerState {
     float skyColorTop[3] = {0.07f, 0.07f, 0.09f};  // horizon-to-top colour
     float skyColorBot[3] = {0.11f, 0.11f, 0.14f};  // ground colour
     bool  skyGradient    = false;                   // draw gradient vs solid
+    
+    bool forward = false;
+    bool left = false;
+    bool backward = false;
+    bool right = false;
+};
+
+struct rwHeader {
+    int fileSignature;
+    int fileSize;
+    int rwVersionId;
+};
+
+struct rwTXDHeader {
+    rwHeader fileHeader;
+    rwHeader unkHeader;
+    short texCount;
+    short platformId;
 };
 
 // ------------------- ГЛОБАЛЬНІ ДАНІ (Оголошення) -------------------

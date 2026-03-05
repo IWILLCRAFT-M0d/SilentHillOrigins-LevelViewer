@@ -1,9 +1,10 @@
-#include "PS2Texture.h"
+#include "Textures.h"
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <iostream>
 
-std::vector<uint8_t> Unswizzle8(const std::vector<uint8_t>& buf, int w, int h) {
+std::vector<uint8_t> TXD::PS2::Unswizzle8(const std::vector<uint8_t>& buf, int w, int h) {
     std::vector<uint8_t> out(w * h);
     if (buf.size() < (size_t)(w * h)) return out;
     for (int y = 0; y < h; y++) {
@@ -20,7 +21,7 @@ std::vector<uint8_t> Unswizzle8(const std::vector<uint8_t>& buf, int w, int h) {
     return out;
 }
 
-std::vector<uint8_t> UnswizzlePalette(const std::vector<uint8_t>& pal) {
+std::vector<uint8_t> TXD::PS2::UnswizzlePalette(const std::vector<uint8_t>& pal) {
     std::vector<uint8_t> newPal(1024, 0);
     if (pal.size() < 1024) return pal;
     for (int p = 0; p < 256; p++) {
@@ -32,13 +33,13 @@ std::vector<uint8_t> UnswizzlePalette(const std::vector<uint8_t>& pal) {
     return newPal;
 }
 
-void ProcessAndUploadTexture(RawTexture& raw) {
+void TXD::PS2::ProcessAndUploadTexture(RawTexture& raw) {
     int w = raw.width, h = raw.height;
     if (w <= 0 || h <= 0) return;
 
     std::vector<uint8_t> indices;
     if (raw.depth == 8) {
-        indices = Unswizzle8(raw.pixels, w, h);
+        indices = TXD::PS2::Unswizzle8(raw.pixels, w, h);
     } else if (raw.depth == 4) {
         // Unpack nibbles to a byte-per-pixel buffer, then deswizzle at full w×h.
         std::vector<uint8_t> unpacked(w * h, 0);
@@ -47,11 +48,11 @@ void ProcessAndUploadTexture(RawTexture& raw) {
             if (i * 2     < unpacked.size()) unpacked[i * 2]     = val & 0xF;
             if (i * 2 + 1 < unpacked.size()) unpacked[i * 2 + 1] = (val >> 4) & 0xF;
         }
-        indices = Unswizzle8(unpacked, w, h);
+        indices = TXD::PS2::Unswizzle8(unpacked, w, h);
     }
 
     std::vector<uint8_t> finalPal;
-    if (raw.depth == 8) finalPal = UnswizzlePalette(raw.palette);
+    if (raw.depth == 8) finalPal = TXD::PS2::UnswizzlePalette(raw.palette);
     else finalPal = raw.palette;
 
     std::vector<uint8_t> rgba(w * h * 4, 255);
@@ -88,4 +89,57 @@ void ProcessAndUploadTexture(RawTexture& raw) {
     TexPreviewInfo pi; pi.glID = raw.glID; pi.width = w; pi.height = h; pi.depth = raw.depth;
     g_TexInfo[raw.name]  = pi;
     g_TexInfo[upper]     = pi;
+}
+
+void TXD::PS2::TextureDataLoad(std::vector<uint8_t>& data, size_t& pos, size_t& sz, const std::vector<std::string>& allowedNames, bool fallback) {
+    const int MAGIC_OFFSET = 80;
+    //uint32_t type; memcpy(&type, &data[pos], 4);
+    uint32_t chunkSz; memcpy(&chunkSz, &data[pos + 4], 4);
+    size_t curr = pos + 32;
+    uint32_t sLen; memcpy(&sLen, &data[curr + 4], 4);
+    std::string tName = (sLen < 128) ? std::string((char*)&data[curr + 12]) : "Unknown";
+    curr += 12 + sLen; memcpy(&sLen, &data[curr + 4], 4); curr += 12 + sLen; curr += 24;
+
+    uint32_t w, h, d;
+    memcpy(&w, &data[curr], 4); memcpy(&h, &data[curr + 4], 4); memcpy(&d, &data[curr + 8], 4);
+    uint32_t dSz, pSz;
+    memcpy(&dSz, &data[curr + 48], 4); memcpy(&pSz, &data[curr + 52], 4);
+    uint32_t rawWrapU, rawWrapV;
+    memcpy(&rawWrapU, &data[curr + 56], 4);
+    memcpy(&rawWrapV, &data[curr + 60], 4);
+    curr += 76;
+
+    RawTexture t;
+    t.name = tName; t.width = w; t.height = h; t.depth = d;
+    t.clampU = (rawWrapU != 0);
+    t.clampV = (rawWrapV != 0);
+
+    bool nameAllowed = fallback;
+    if (!fallback) {
+        for (const auto& allowed : allowedNames) {
+            if (strcasecmp(t.name.c_str(), allowed.c_str()) == 0) {
+                nameAllowed = true;
+                break;
+            }
+        }
+    }
+    if (!nameAllowed) {
+        pos += 12 + chunkSz; return;
+    }
+
+    if (curr + MAGIC_OFFSET + (dSz - MAGIC_OFFSET) <= sz && dSz > MAGIC_OFFSET) {
+        t.pixels.resize(dSz - MAGIC_OFFSET);
+        memcpy(t.pixels.data(), &data[curr + MAGIC_OFFSET], dSz - MAGIC_OFFSET);
+    }
+    curr += dSz;
+    if (pSz > MAGIC_OFFSET && curr + MAGIC_OFFSET + (pSz - MAGIC_OFFSET) <= sz) {
+        t.palette.resize(pSz - MAGIC_OFFSET);
+        memcpy(t.palette.data(), &data[curr + MAGIC_OFFSET], pSz - MAGIC_OFFSET);
+    }
+
+    if (!t.pixels.empty() && g_TextureMap.find(t.name) == g_TextureMap.end()) {
+        TXD::PS2::ProcessAndUploadTexture(t);
+    }
+
+    pos += 12 + chunkSz; return;
 }
